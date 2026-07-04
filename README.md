@@ -82,7 +82,8 @@ npm start
 ## 开发
 
 - 架构说明、agent loop / 工具 / 提示词的开发规则：[DEVELOPMENT.md（开发守则）](./DEVELOPMENT.md)
-- 现状、MVP 定义、任务列表与认领方式：[ROADMAP.md（路线图）](./ROADMAP.md)
+- 现状、MVP 定义、方向：[ROADMAP.md（路线图）](./ROADMAP.md)
+- 每个任务的实施方案、状态表与认领方式：[PLAN.md（实施计划）](./PLAN.md)
 
 ## 安全说明
 
