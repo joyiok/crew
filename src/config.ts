@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { ModelPrice } from "./usage.js";
 
 /** 一个模型端点的定义：接哪个厂商、用哪个模型 */
 export interface ModelConfig {
@@ -16,6 +17,8 @@ export interface ProviderConfig {
 export interface WorkerConfig extends ModelConfig {
   /** 给指挥模型看的能力描述，影响任务怎么分派 */
   description: string;
+  /** 异常时的兜底模型（同 provider 或自定义 provider/model），重试一次 */
+  fallbackModel?: string;
 }
 
 export interface CrewConfig {
@@ -24,6 +27,10 @@ export interface CrewConfig {
   providers: Record<string, ProviderConfig>;
   /** true 时执行 shell 命令不再逐条向用户确认 */
   autoApprove: boolean;
+  /** 上下文字符数阈值，超过则裁剪最老的 tool 结果 */
+  contextCharLimit: number;
+  /** 可选的模型价格表：元/百万 tokens */
+  prices?: Record<string, ModelPrice>;
 }
 
 /** 内置的 OpenAI 兼容厂商 */
@@ -58,6 +65,7 @@ const DEFAULT_CONFIG: CrewConfig = {
   },
   providers: {},
   autoApprove: false,
+  contextCharLimit: 300_000,
 };
 
 export const CONFIG_FILE = "crew.config.json";
@@ -72,6 +80,9 @@ export function loadConfig(cwd: string): CrewConfig {
     workers: raw.workers ?? DEFAULT_CONFIG.workers,
     providers: raw.providers ?? {},
     autoApprove: raw.autoApprove ?? false,
+    contextCharLimit:
+      raw.contextCharLimit ?? DEFAULT_CONFIG.contextCharLimit,
+    prices: raw.prices,
   };
 }
 

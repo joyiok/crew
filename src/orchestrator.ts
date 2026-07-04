@@ -1,12 +1,19 @@
 import { CrewConfig } from "./config.js";
+import { pruneHistory } from "./context.js";
 import {
-  chat,
   ChatCompletionMessageParam,
   ChatCompletionTool,
+  chatStream,
 } from "./llm.js";
 import { executeTool } from "./tools.js";
+import {
+  diffUsage,
+  renderUsageLine,
+  snapshotUsage,
+  UsageEntry,
+} from "./usage.js";
 import { runWorker } from "./worker.js";
-import { info, orchestratorSays } from "./ui.js";
+import { createOrchestratorStreamWriter, info, orchestratorSays } from "./ui.js";
 
 const MAX_ITERATIONS = 25;
 
@@ -116,27 +123,54 @@ export class Orchestrator {
   }
 
   /** 处理一轮用户输入：跑指挥循环直到没有工具调用，返回最终回复 */
-  async handle(userInput: string): Promise<string> {
+  async handle(
+    userInput: string,
+    signal?: AbortSignal,
+  ): Promise<{ reply: string; streamed: boolean; usageDelta: Map<string, UsageEntry> }> {
     this.messages.push({ role: "user", content: userInput });
     const tools = orchestratorTools(this.config);
+    const usageBefore = snapshotUsage();
+    let prunedNotified = false;
+    let interrupted = false;
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const msg = await chat(
+      if (signal?.aborted) {
+        interrupted = true;
+        break;
+      }
+
+      const { messages, pruned } = pruneHistory(
+        this.messages,
+        this.config.contextCharLimit,
+      );
+      if (pruned && !prunedNotified) {
+        info("上下文已裁剪：旧的 tool 结果被替换为占位符以节省 tokens");
+        prunedNotified = true;
+      }
+      this.messages = messages;
+
+      const onText = createOrchestratorStreamWriter();
+      const { message: msg } = await chatStream(
         this.config.orchestrator,
         this.config,
         this.messages,
         tools,
+        onText,
+        signal,
       );
       this.messages.push(msg);
 
       const toolCalls = msg.tool_calls ?? [];
       if (toolCalls.length === 0) {
-        return msg.content ?? "(指挥模型没有返回内容)";
+        process.stdout.write("\n");
+        return {
+          reply: msg.content ?? "(指挥模型没有返回内容)",
+          streamed: true,
+          usageDelta: diffUsage(usageBefore, snapshotUsage()),
+        };
       }
 
-      // 指挥模型说的话（伴随工具调用的思路说明）也展示给用户
-      if (msg.content) orchestratorSays(msg.content);
-
+      // 伴随工具调用的思路说明已经在流式输出里打印过了
       const results = await Promise.all(
         toolCalls.map(async (tc) => {
           let args: Record<string, unknown> = {};
@@ -146,33 +180,46 @@ export class Orchestrator {
             return { id: tc.id, result: "错误: 工具参数不是合法 JSON" };
           }
 
-          if (tc.function.name === "dispatch_task") {
-            const workerName = String(args.worker);
-            const worker = this.config.workers[workerName];
-            if (!worker) {
-              return {
-                id: tc.id,
-                result: `错误: 没有名为 "${workerName}" 的 worker`,
-              };
-            }
-            orchestratorSays(`派活给 ${workerName}: ${String(args.task).slice(0, 120)}...`);
-            const report = await runWorker(
-              workerName,
-              worker,
-              String(args.task),
-              this.config,
-              this.cwd,
-            );
-            return { id: tc.id, result: `[${workerName} 的报告]\n${report}` };
+          if (signal?.aborted) {
+            return { id: tc.id, result: "任务被用户中断" };
           }
 
-          // 指挥自己的轻量工具（read_file / list_dir），只读不写
-          const result = await executeTool(tc.function.name, args, {
-            cwd: this.cwd,
-            workerName: "指挥",
-            autoApprove: true,
-          });
-          return { id: tc.id, result };
+          try {
+            if (tc.function.name === "dispatch_task") {
+              const workerName = String(args.worker);
+              const worker = this.config.workers[workerName];
+              if (!worker) {
+                return {
+                  id: tc.id,
+                  result: `错误: 没有名为 "${workerName}" 的 worker`,
+                };
+              }
+              orchestratorSays(`派活给 ${workerName}: ${String(args.task).slice(0, 120)}...`);
+              const report = await runWorker(
+                workerName,
+                worker,
+                String(args.task),
+                this.config,
+                this.cwd,
+                signal,
+              );
+              return { id: tc.id, result: `[${workerName} 的报告]\n${report}` };
+            }
+
+            // 指挥自己的轻量工具（read_file / list_dir），只读不写
+            const result = await executeTool(tc.function.name, args, {
+              cwd: this.cwd,
+              workerName: "指挥",
+              autoApprove: true,
+              signal,
+            });
+            return { id: tc.id, result };
+          } catch (e: any) {
+            if (e.name === "AbortError" || signal?.aborted) {
+              return { id: tc.id, result: "任务被用户中断" };
+            }
+            return { id: tc.id, result: `错误: ${e.message}` };
+          }
         }),
       );
 
@@ -181,12 +228,41 @@ export class Orchestrator {
       }
     }
 
+    if (interrupted) {
+      this.messages.push({
+        role: "user",
+        content: "[上一个任务被用户中断]",
+      });
+      return {
+        reply: "任务已中断。可以继续输入新指令。",
+        streamed: false,
+        usageDelta: diffUsage(usageBefore, snapshotUsage()),
+      };
+    }
+
     info(`指挥循环达到最大迭代次数 (${MAX_ITERATIONS})`);
-    return "本轮指挥循环超出迭代上限，已停止。可以继续对话让我接着处理。";
+    return {
+      reply: "本轮指挥循环超出迭代上限，已停止。可以继续对话让我接着处理。",
+      streamed: false,
+      usageDelta: diffUsage(usageBefore, snapshotUsage()),
+    };
   }
 
   /** 清空对话历史（保留 system prompt） */
   reset() {
     this.messages = this.messages.slice(0, 1);
+  }
+
+  /** 序列化会话（不含 system prompt，恢复时会用当前配置重建） */
+  serialize(): ChatCompletionMessageParam[] {
+    return this.messages.slice(1);
+  }
+
+  /** 恢复会话：保留当前 system prompt，替换对话部分 */
+  restore(conversation: ChatCompletionMessageParam[]): void {
+    this.messages = [
+      { role: "system", content: systemPrompt(this.config, this.cwd) },
+      ...conversation,
+    ];
   }
 }

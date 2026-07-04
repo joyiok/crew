@@ -8,6 +8,7 @@ import {
 } from "./config.js";
 import { CRED_FILE, resolveApiKey, saveKey } from "./credentials.js";
 import { resetClients, validateApiKey } from "./llm.js";
+import { runInit } from "./init.js";
 import { Orchestrator } from "./orchestrator.js";
 import {
   ask,
@@ -18,9 +19,12 @@ import {
   orchestratorSays,
   rl,
 } from "./ui.js";
+import { loadSession, saveSession } from "./session.js";
+import { renderUsageLine, renderUsageReport, resetUsage } from "./usage.js";
 
 const HELP = `命令:
   /models            查看当前的指挥模型和 worker 配置
+  /usage             查看本轮与会话的 token 用量
   /login [provider]  重新配置某个厂商的 API key（不带参数则逐个配置）
   /clear             清空对话历史
   /help              显示本帮助
@@ -103,8 +107,32 @@ async function main() {
     config.autoApprove = true;
   }
 
-  // 用户 Ctrl+D 或输入流结束时干净退出
-  rl.on("close", () => process.exit(0));
+  const shouldResume = process.argv.includes("--resume");
+
+  // 用户 Ctrl+D 或输入流结束时保存会话并退出
+  let orchestrator: Orchestrator;
+  rl.on("close", () => {
+    saveSession(cwd, orchestrator?.serialize() ?? []);
+    process.exit(0);
+  });
+
+  let busy = false;
+  let abortController: AbortController | null = null;
+  let lastSigintAt = 0;
+
+  rl.on("SIGINT", () => {
+    if (busy && abortController) {
+      info("\n收到 Ctrl+C，正在中断当前任务...");
+      abortController.abort();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastSigintAt < 2000) {
+      process.exit(0);
+    }
+    lastSigintAt = now;
+    info("再按一次 Ctrl+C 退出");
+  });
 
   banner("═══ crew — 多模型协作 coding 工具 ═══");
   info(`工作目录: ${cwd}`);
@@ -125,7 +153,17 @@ async function main() {
     process.exit(1);
   }
 
-  const orchestrator = new Orchestrator(config, cwd);
+  orchestrator = new Orchestrator(config, cwd);
+
+  if (shouldResume) {
+    const conversation = loadSession(cwd);
+    if (conversation) {
+      orchestrator.restore(conversation);
+      info("已恢复上次会话");
+    } else {
+      info("未找到可恢复的上次会话");
+    }
+  }
 
   while (true) {
     const input = (await ask("\x1b[1m你> \x1b[0m")).trim();
@@ -138,7 +176,12 @@ async function main() {
     }
     if (input === "/clear") {
       orchestrator.reset();
-      info("对话历史已清空");
+      resetUsage();
+      info("对话历史与用量统计已清空");
+      continue;
+    }
+    if (input === "/usage") {
+      console.log(renderUsageReport(config));
       continue;
     }
     if (input === "/models") {
@@ -162,17 +205,45 @@ async function main() {
       continue;
     }
 
+    abortController = new AbortController();
+    busy = true;
     try {
-      const reply = await orchestrator.handle(input);
-      console.log();
-      orchestratorSays(reply);
-      console.log();
+      const { reply, streamed, usageDelta } = await orchestrator.handle(
+        input,
+        abortController.signal,
+      );
+      if (!streamed) {
+        console.log();
+        orchestratorSays(reply);
+        console.log();
+      }
+      if (usageDelta.size > 0) {
+        info("本轮 token 用量：");
+        for (const [k, entry] of usageDelta) {
+          const [provider, model] = k.split("/");
+          info("  " + renderUsageLine(config, { provider, model }, entry));
+        }
+      }
     } catch (e: any) {
-      error(`出错了: ${e.message}`);
+      if (e.name === "AbortError" || abortController.signal.aborted) {
+        error("任务被中断");
+      } else {
+        error(`出错了: ${e.message}`);
+      }
+    } finally {
+      busy = false;
+      abortController = null;
     }
   }
 
   rl.close();
 }
 
-main();
+if (process.argv[2] === "init") {
+  runInit(process.cwd()).catch((e) => {
+    error(e.message);
+    process.exit(1);
+  });
+} else {
+  main();
+}

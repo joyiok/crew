@@ -1,25 +1,42 @@
 {
   "name": "crew",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "多模型协作 coding 工具：一个指挥模型调度多个工作模型干活",
   "type": "module",
   "bin": {
     "crew": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=18"
   },
+  "keywords": [
+    "cli",
+    "ai",
+    "coding",
+    "multi-agent",
+    "openai"
+  ],
   "dependencies": {
-    "openai": "^4.77.0"
+    "diff": "^9.0.0",
+    "openai": "^4.77.0",
+    "picomatch": "^4.0.5"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/node": "^22.10.0",
+    "@types/picomatch": "^4.0.3",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
   }
 }

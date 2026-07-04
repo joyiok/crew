@@ -66,12 +66,49 @@ export function confirm(question: string): Promise<boolean> {
   return result;
 }
 
+/**
+ * 请求用户确认一次写操作，展示 diff。拒绝时可填写原因。
+ * 返回 { ok, reason }，reason 仅在拒绝时可能非空。
+ */
+export async function confirmWrite(diff: string): Promise<{ ok: boolean; reason?: string }> {
+  const ok = await confirm(`是否应用以下修改？\n${COLORS.dim}${diff}${COLORS.reset}\n确认`);
+  if (ok) return { ok: true };
+  const reason = (await ask("拒绝原因（可选，直接回车跳过）: ")).trim();
+  return { ok: false, reason: reason || undefined };
+}
+
 export function banner(text: string) {
   console.log(`${COLORS.bold}${COLORS.magenta}${text}${COLORS.reset}`);
 }
 
 export function orchestratorSays(text: string) {
   console.log(`${COLORS.magenta}${COLORS.bold}[指挥]${COLORS.reset} ${text}`);
+}
+
+/**
+ * 创建一个流式输出写入器：第一次写入时把 label 打到行首，后续增量直接追加。
+ * 调用方需要在流结束时自行换行。
+ */
+export function createStreamWriter(prefix: string): (text: string) => void {
+  let started = false;
+  return (text: string) => {
+    if (!started) {
+      process.stdout.write(prefix);
+      started = true;
+    }
+    process.stdout.write(text);
+  };
+}
+
+export function createOrchestratorStreamWriter(): (text: string) => void {
+  return createStreamWriter(
+    `${COLORS.magenta}${COLORS.bold}[指挥]${COLORS.reset} `,
+  );
+}
+
+export function createWorkerStreamWriter(name: string): (text: string) => void {
+  const c = workerColor(name);
+  return createStreamWriter(`${c}[${name}]${COLORS.reset} `);
 }
 
 export function workerEvent(name: string, event: string) {

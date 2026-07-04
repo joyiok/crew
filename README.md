@@ -1,5 +1,7 @@
 # crew — 多模型协作 coding 工具
 
+[![CI](https://github.com/joyiok/crew/actions/workflows/ci.yml/badge.svg)](https://github.com/joyiok/crew/actions/workflows/ci.yml)
+
 一个交互式 CLI：**指挥模型**接收你的需求，分解任务后派给多个**工作模型**执行。工作模型可以读写文件、执行命令（跑测试、装依赖），完成后向指挥模型汇报，指挥模型验收并向你总结。
 
 ```
@@ -62,12 +64,19 @@ npm start
       "apiKeyEnv": "MY_PROXY_KEY"
     }
   },
-  "autoApprove": false
+  "prices": {
+    "deepseek-chat": { "input": 2, "output": 8 },
+    "qwen-coder-plus": { "input": 3.5, "output": 7 }
+  },
+  "autoApprove": false,
+  "contextCharLimit": 300000
 }
 ```
 
 - `workers` 可以随意增删；`description` 会展示给指挥模型，直接影响它怎么分工
 - `providers` 用于接入任何 OpenAI 兼容的自建网关 / 其他厂商
+- `prices` 可选：配置后 `/usage` 会显示估算金额（元/百万 tokens）
+- `contextCharLimit` 默认 300000：接近阈值时旧的 tool 结果会被替换为占位符
 - `autoApprove: true`（或启动时加 `--yes`）后，worker 执行 shell 命令不再逐条向你确认
 
 ## 命令
@@ -75,6 +84,7 @@ npm start
 | 命令 | 作用 |
 |---|---|
 | `/models` | 查看当前模型配置 |
+| `/usage` | 查看本轮增量和会话累计 token 用量（配了价格则显示金额） |
 | `/login [provider]` | 重新配置某个厂商的 API key |
 | `/clear` | 清空对话历史 |
 | `/exit` | 退出 |
