@@ -33,6 +33,24 @@ export function ask(prompt: string): Promise<string> {
   return new Promise((resolve) => rl.question(prompt, resolve));
 }
 
+/** 询问敏感输入（API key 等）：输入过程不回显，只在回车时换行 */
+export function askSecret(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    const anyRl = rl as unknown as {
+      _writeToOutput?: (s: string) => void;
+      output: NodeJS.WritableStream;
+    };
+    process.stdout.write(prompt);
+    anyRl._writeToOutput = (s: string) => {
+      if (s.includes("\n") || s.includes("\r")) anyRl.output.write("\r\n");
+    };
+    rl.question("", (answer) => {
+      delete anyRl._writeToOutput;
+      resolve(answer.trim());
+    });
+  });
+}
+
 // 多个 worker 并行跑时，确认提示要排队逐个出现，避免交错
 let confirmQueue: Promise<unknown> = Promise.resolve();
 

@@ -13,10 +13,15 @@
 
 ```bash
 npm install
+npm start
+```
 
-# 至少配一个 API key（默认配置全用 DeepSeek）
+首次运行会自动引导你配置 API key：展示申请地址 → 粘贴 key（输入不回显）→ 在线验证 → 保存到 `~/.crew/credentials.json`（权限 600，仅本机）。之后再启动就直接进入对话。
+
+也可以用环境变量（优先级高于保存的 key）：
+
+```bash
 export DEEPSEEK_API_KEY=sk-...
-
 npm start
 ```
 
@@ -70,8 +75,13 @@ npm start
 | 命令 | 作用 |
 |---|---|
 | `/models` | 查看当前模型配置 |
+| `/login [provider]` | 重新配置某个厂商的 API key |
 | `/clear` | 清空对话历史 |
 | `/exit` | 退出 |
+
+## 开发
+
+架构说明、agent loop / 工具 / 提示词的开发规则见 [DEVELOPMENT.md（开发守则）](./DEVELOPMENT.md)。
 
 ## 安全说明
 
